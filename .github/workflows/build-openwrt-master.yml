@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v5
 
       - name: Initialization environment
         env:
@@ -127,7 +127,7 @@ jobs:
 
       - name: Organize files
         id: organize
-        if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+        if: env.UPLOAD_FIRMWARE == 'true' && success() && steps.compile.outputs.status == 'success'
         run: |
           cd openwrt/bin/targets/*/*
           tar -zcf packages.tar.gz -C packages .
@@ -137,14 +137,14 @@ jobs:
 
       - name: Upload firmware directory
         uses: actions/upload-artifact@v4
-        if: steps.organize.outputs.status == 'success' && !cancelled()
+        if: steps.organize.outputs.status == 'success' && success()
         with:
           name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
           path: ${{ env.FIRMWARE }}
 
       - name: Upload firmware to cowtransfer
         id: cowtransfer
-        if: steps.organize.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && !cancelled()
+        if: steps.organize.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && success()
         run: |
           curl -fsSL git.io/file-transfer | sh
           ./transfer cow --block 2621440 -s -p 64 --no-progress ${FIRMWARE} 2>&1 | tee cowtransfer.log
@@ -153,7 +153,7 @@ jobs:
 
       - name: Upload firmware to WeTransfer
         id: wetransfer
-        if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
+        if: steps.organize.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && success()
         run: |
           curl -fsSL git.io/file-transfer | sh
           ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
@@ -162,7 +162,7 @@ jobs:
 
       - name: Generate release tag
         id: tag
-        if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+        if: env.UPLOAD_RELEASE == 'true' && success()
         run: |
           echo "release_tag=$(date +"%Y.%m.%d-%H%M")-master" >> $GITHUB_OUTPUT
           touch release.txt
@@ -171,8 +171,8 @@ jobs:
           echo "status=success" >> $GITHUB_OUTPUT
 
       - name: Upload firmware to release
-        uses: softprops/action-gh-release@v1
-        if: steps.tag.outputs.status == 'success' && !cancelled()
+        uses: softprops/action-gh-release@v2
+        if: steps.tag.outputs.status == 'success' && success()
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -188,10 +188,11 @@ jobs:
           keep_minimum_runs: 3
 
       - name: Remove old Releases
-        uses: dev-drprasad/delete-older-releases@v0.2.1
-        if: env.UPLOAD_RELEASE == 'true' && !cancelled()
-        with:
-          keep_latest: 3
-          delete_tags: true
+        if: success() && env.UPLOAD_RELEASE == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release list --limit 100 --json tagName --jq '.[3:][].tagName' | while read -r tag; do
+            gh release delete "$tag" --yes
+            gh api -X DELETE "repos/${{ github.repository }}/git/refs/tags/$tag" || true
+          done
