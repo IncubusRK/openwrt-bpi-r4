@@ -152,6 +152,9 @@ jobs:
           cp -a files /workdir/openwrt/files
           cp "${{ matrix.seed }}" /workdir/openwrt/.config
           echo 'CONFIG_CCACHE=y' >> /workdir/openwrt/.config
+          # rules.mk exports CCACHE_DIR=$(TOPDIR)/.ccache unless CONFIG_CCACHE_DIR
+          # is set — point it at the cached path, otherwise ccache never persists.
+          echo 'CONFIG_CCACHE_DIR="/home/runner/.ccache"' >> /workdir/openwrt/.config
 
       - name: Custom packages and geodata (diy-part2)
         env:
