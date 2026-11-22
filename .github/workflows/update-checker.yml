@@ -60,7 +60,7 @@ jobs:
 
       - name: Lookup previous hash
         id: cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .checker-hash
           key: checker-${{ matrix.branch }}-${{ steps.heads.outputs.hash }}
@@ -78,7 +78,7 @@ jobs:
 
       - name: Save new hash
         if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .checker-hash
           key: checker-${{ matrix.branch }}-${{ steps.heads.outputs.hash }}
