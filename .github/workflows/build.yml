@@ -168,6 +168,8 @@ jobs:
         run: |
           cd /workdir/openwrt
           make defconfig
+          # CCACHE depends on DEVEL; catch silent defconfig drops
+          grep '^CONFIG_CCACHE=y' .config
           make download -j8
           find dl -size -1024c -exec rm -f {} \;
 
@@ -178,6 +180,7 @@ jobs:
           export CCACHE_MAXSIZE=3G
           echo "$(nproc) threads"
           make -j"$(nproc)" || make -j1 V=s
+          ccache -s || true
 
       - name: Verify build
         run: |
