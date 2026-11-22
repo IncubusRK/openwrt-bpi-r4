@@ -171,7 +171,10 @@ jobs:
           # CCACHE depends on DEVEL; catch silent defconfig drops
           grep '^CONFIG_CCACHE=y' .config
           make download -j8
-          find dl -size -1024c -exec rm -f {} \;
+          # Only prune root-level failed-download placeholders. NEVER descend
+          # into dl/go-mod-cache: .info/.mod/.ziphash files there are <1K and
+          # deleting them corrupts restored Go module cache (issues #38).
+          find dl -maxdepth 1 -type f -size -1024c -exec rm -f {} \;
 
       - name: Compile
         run: |
