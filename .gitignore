@@ -1,4 +1,4 @@
-# Build artifacts / staging — никогда не коммитить
+# Build artifacts / staging — never commit
 /firmware/
 /firmware.bin/
 *.itb
@@ -9,7 +9,7 @@
 sha256sums
 packages/
 
-# Локальные конфиги и секреты (роутерный конфиг живёт только на устройстве)
+# Local configs and secrets (the router config lives on the device only)
 .config.local
 *.pem
 *.key
