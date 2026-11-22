@@ -47,5 +47,7 @@ if [ "$COUNT" -eq 0 ]; then
 	echo "warning: no extra packages found" >&2
 fi
 
+# image.keys is a staging helper, not a package — do not ship it in the archive
+rm -f "$STAGE/image.keys"
 tar -czf "$OUT" -C "$STAGE" .
 echo "archive: $OUT ($(stat -c%s "$OUT" 2>/dev/null || stat -f%z "$OUT") bytes)"
