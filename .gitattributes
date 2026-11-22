@@ -1,0 +1,13 @@
+# Нормализация EOL: в репозитории всегда LF, рабочая копия — нативная.
+* text=auto
+
+# Бинарные артефакты (если вдруг появятся в дереве)
+*.itb binary
+*.img binary
+*.img.gz binary
+*.bin binary
+*.dat binary
+*.db binary
+*.png binary
+*.jpg binary
+*.gz binary

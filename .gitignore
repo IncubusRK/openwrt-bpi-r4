@@ -1,0 +1,27 @@
+# Build artifacts / staging — никогда не коммитить
+/firmware/
+/firmware.bin/
+*.itb
+*.img
+*.img.gz
+*.bin
+*.manifest
+sha256sums
+packages/
+
+# Локальные конфиги и секреты (роутерный конфиг живёт только на устройстве)
+.config.local
+*.pem
+*.key
+sysupgrade.tgz
+backup-*.tar.gz
+backup-*.tgz
+
+# OS / editor noise
+Thumbs.db
+Desktop.ini
+.DS_Store
+*.swp
+*~
+# ucode compile test output
+uc.out*
