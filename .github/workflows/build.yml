@@ -125,7 +125,13 @@ jobs:
 
       - name: Clone OpenWrt
         run: |
-          git clone --depth 1 -b "${{ matrix.branch }}" "$REPO_URL" /workdir/openwrt
+          # Cache restore above may have created /workdir/openwrt/dl already;
+          # cloning straight into a non-empty dir fails. Clone into a scratch
+          # dir and merge, preserving the cached dl/.
+          git clone --depth 1 -b "${{ matrix.branch }}" "$REPO_URL" /workdir/openwrt-src
+          mkdir -p /workdir/openwrt
+          rsync -a /workdir/openwrt-src/ /workdir/openwrt/
+          rm -rf /workdir/openwrt-src
           git -C /workdir/openwrt rev-parse HEAD > /workdir/openwrt-head.txt
           cat /workdir/openwrt-head.txt
 

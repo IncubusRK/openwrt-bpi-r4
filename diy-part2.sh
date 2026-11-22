@@ -24,6 +24,14 @@ clone() {
 	[ -d "$1" ] || git clone --depth 1 "$2" "$1"
 }
 
+# Full history for our own repos: luci.mk findrev stamps the i18n version
+# from "git log -1 -- po"; a shallow clone whose HEAD did not touch po/
+# falls back to version 0. (Third-party apps keep depth 1 — version 0 in
+# their image-baked i18n is harmless, they have no external upgrade source.)
+clone_full() {
+	[ -d "$1" ] || git clone "$2" "$1"
+}
+
 # Needed by both FULL and NAND.
 clone zapret2-openwrt  https://github.com/1andrevich/zapret2-openwrt
 clone awg-openwrt      https://github.com/slava-shchipunov/awg-openwrt
@@ -35,9 +43,9 @@ if [ "$VARIANT" = full ]; then
 	clone podkop              https://github.com/itdoginfo/podkop
 	clone homeproxy-hiddify   https://github.com/1andrevich/homeproxy-hiddify
 	clone luci-app-xray       https://github.com/yichya/luci-app-xray
-	clone luci-app-geodata    https://github.com/IncubusRK/luci-app-geodata
-	clone luci-app-naiveproxy https://github.com/IncubusRK/luci-app-naiveproxy
-	clone openwrt-mieru       https://github.com/IncubusRK/openwrt-mieru
+	clone_full luci-app-geodata    https://github.com/IncubusRK/luci-app-geodata
+	clone_full luci-app-naiveproxy https://github.com/IncubusRK/luci-app-naiveproxy
+	clone_full openwrt-mieru       https://github.com/IncubusRK/openwrt-mieru
 
 	# diskman: only the application subdir — the repo root carries its own
 	# Parted.Makefile which conflicts with the official parted package.
