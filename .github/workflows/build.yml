@@ -1,0 +1,313 @@
+# Build OpenWrt for Banana Pi BPI-R4 (non-PoE).
+#
+# Matrix:
+#   master        -> FULL            (snapshot, prerelease)
+#   openwrt-25.12 -> FULL + NAND     (stable branch, one combined release)
+#
+# Triggers:
+#   - push to main touching the recipe (seeds/files/scripts/diy/workflow)
+#   - repository_dispatch "upstream-update" {branch} from update-checker.yml
+#     (works with GITHUB_TOKEN — no PAT needed)
+#   - workflow_dispatch (manual, branch selector)
+#
+# Releases: dated tags per branch (master-YYYY.MM.DD-HHMM / 25.12-...),
+# keep 3 per branch. FULL assets keep canonical names; NAND assets are
+# prefixed "nand-" so releases/latest/download/nand-sdcard.img.gz is stable.
+# extra-packages.tar.gz contains ONLY packages NOT in the image
+# (docker/compose, samba4, other =m modules) — scripts/extra-packages.sh.
+
+name: Build OpenWrt
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'seeds/**'
+      - 'files/**'
+      - 'scripts/**'
+      - 'diy-part*.sh'
+      - '.github/workflows/build.yml'
+  repository_dispatch:
+    types: [upstream-update]
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build'
+        type: choice
+        options: [all, master, openwrt-25.12]
+        default: all
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  REPO_URL: https://github.com/openwrt/openwrt
+  TZ: Europe/Moscow
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    if: >-
+      (github.event_name != 'repository_dispatch' || github.event.client_payload.branch == matrix.branch) &&
+      (github.event_name != 'workflow_dispatch' || inputs.branch == 'all' || inputs.branch == matrix.branch)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - branch: master
+            variant: full
+            seed: seeds/full-master.config
+          - branch: openwrt-25.12
+            variant: full
+            seed: seeds/full-2512.config
+          - branch: openwrt-25.12
+            variant: nand
+            seed: seeds/nand-2512.config
+    concurrency:
+      group: build-${{ matrix.branch }}-${{ matrix.variant }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout recipe
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                    /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          sudo apt-get clean
+          df -hT
+
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install build-essential clang flex bison g++ gawk \
+            gcc-multilib gettext git libncurses5-dev libssl-dev libelf-dev \
+            python3-setuptools python3-dev rsync swig unzip zlib1g-dev file wget ccache
+          sudo timedatectl set-timezone "$TZ"
+
+      - name: Prepare workdir (fixed path for cache reuse)
+        run: |
+          sudo mkdir -p /workdir
+          sudo chown "$USER" /workdir
+
+      - name: Cache dl + ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            /workdir/openwrt/dl
+            /home/runner/.ccache
+          key: openwrt-${{ matrix.branch }}-${{ matrix.variant }}-cache-${{ github.run_id }}
+          restore-keys: |
+            openwrt-${{ matrix.branch }}-${{ matrix.variant }}-cache-
+
+      - name: Clone OpenWrt
+        run: |
+          git clone --depth 1 -b "${{ matrix.branch }}" "$REPO_URL" /workdir/openwrt
+          git -C /workdir/openwrt rev-parse HEAD > /workdir/openwrt-head.txt
+          cat /workdir/openwrt-head.txt
+
+      - name: Load custom feeds (diy-part1)
+        run: |
+          chmod +x diy-part1.sh
+          cd /workdir/openwrt
+          "$GITHUB_WORKSPACE/diy-part1.sh"
+
+      - name: Update feeds
+        run: cd /workdir/openwrt && ./scripts/feeds update -a
+
+      - name: Install feeds
+        run: cd /workdir/openwrt && ./scripts/feeds install -a
+
+      - name: Load files and seed config
+        run: |
+          cp -a files /workdir/openwrt/files
+          cp "${{ matrix.seed }}" /workdir/openwrt/.config
+          echo 'CONFIG_CCACHE=y' >> /workdir/openwrt/.config
+
+      - name: Custom packages and geodata (diy-part2)
+        env:
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          chmod +x diy-part2.sh
+          cd /workdir/openwrt
+          "$GITHUB_WORKSPACE/diy-part2.sh"
+
+      - name: Defconfig and download
+        run: |
+          cd /workdir/openwrt
+          make defconfig
+          make download -j8
+          find dl -size -1024c -exec rm -f {} \;
+
+      - name: Compile
+        run: |
+          cd /workdir/openwrt
+          export CCACHE_DIR=/home/runner/.ccache
+          export CCACHE_MAXSIZE=3G
+          echo "$(nproc) threads"
+          make -j"$(nproc)" || make -j1 V=s
+
+      - name: Verify build
+        run: |
+          cd /workdir/openwrt
+          T=bin/targets/mediatek/filogic
+          bash "$GITHUB_WORKSPACE/scripts/verify-build.sh" "${{ matrix.variant }}" \
+            "$T/openwrt-mediatek-filogic-bananapi_bpi-r4.manifest"
+          test -f files/etc/uci-defaults/99-proxy-safe-defaults
+          test -f files/etc/adguardhome/adguardhome.yaml
+          test -f files/usr/share/rpcd/acl.d/luci-file-rpc.json
+          if [ "${{ matrix.variant }}" = full ]; then
+            sha256sum files/usr/share/v2ray/geoip.dat files/usr/share/v2ray/geosite.dat
+          else
+            test ! -d files/usr/share/v2ray
+          fi
+
+      - name: Organize artifacts
+        run: |
+          cd /workdir/openwrt
+          T=bin/targets/mediatek/filogic
+          OUT=/workdir/out
+          mkdir -p "$OUT/meta"
+          ITB=openwrt-mediatek-filogic-bananapi_bpi-r4-squashfs-sysupgrade.itb
+          MAN=openwrt-mediatek-filogic-bananapi_bpi-r4.manifest
+          if [ "${{ matrix.variant }}" = full ]; then
+            cp "$T/$ITB" "$T/$MAN" "$T/sha256sums" "$OUT/"
+            bash "$GITHUB_WORKSPACE/scripts/extra-packages.sh" "$T/$MAN" bin/packages "$OUT/extra-packages.tar.gz"
+            cp geodata-sha256.txt "$OUT/meta/"
+          else
+            SD=openwrt-mediatek-filogic-bananapi_bpi-r4-sdcard.img.gz
+            UNPACKED=$(gzip -dc "$T/$SD" | wc -c)
+            echo "sdcard unpacked: $UNPACKED bytes"
+            [ "$UNPACKED" -lt 134217728 ] || { echo "ERROR: NAND image exceeds 128 MiB" >&2; exit 1; }
+            cp "$T/$ITB" "$OUT/nand-sysupgrade.itb"
+            cp "$T/$SD" "$OUT/nand-sdcard.img.gz"
+            cp "$T/$MAN" "$OUT/nand.manifest"
+            cp "$T/sha256sums" "$OUT/nand.sha256sums"
+            echo "$UNPACKED" > "$OUT/meta/nand-unpacked-size.txt"
+          fi
+          cp /workdir/openwrt-head.txt repo-heads.txt "$OUT/meta/"
+          (cd "$OUT" && sha256sum ./*.itb ./*.tar.gz > meta/asset-sha256.txt 2>/dev/null || true)
+          ls -la "$OUT"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ matrix.branch }}-${{ matrix.variant }}
+          path: /workdir/out/*
+          retention-days: 7
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: >-
+      always() &&
+      (github.event_name != 'repository_dispatch' || github.event.client_payload.branch == matrix.branch) &&
+      (github.event_name != 'workflow_dispatch' || inputs.branch == 'all' || inputs.branch == matrix.branch)
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [master, openwrt-25.12]
+    concurrency:
+      group: release-${{ matrix.branch }}
+      cancel-in-progress: false
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-${{ matrix.branch }}-*
+          merge-multiple: true
+          path: out
+
+      - name: Check artifacts
+        id: check
+        run: |
+          if [ ! -f out/openwrt-mediatek-filogic-bananapi_bpi-r4-squashfs-sysupgrade.itb ] || [ ! -f out/meta/openwrt-head.txt ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::build artifacts missing for ${{ matrix.branch }} — skipping release"
+            exit 0
+          fi
+          if [ "${{ matrix.branch }}" = "openwrt-25.12" ] && [ ! -f out/nand-sdcard.img.gz ]; then
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::NAND artifacts missing — skipping combined release"
+            exit 0
+          fi
+          echo "ok=true" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        if: steps.check.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          PREFIX="master"
+          PRERELEASE="--prerelease"
+          TITLE_KIND="master snapshot (FULL)"
+          if [ "${{ matrix.branch }}" = "openwrt-25.12" ]; then
+            PREFIX="25.12"
+            PRERELEASE=""
+            TITLE_KIND="25.12: FULL + NAND"
+          fi
+          TAG="$PREFIX-$(date +%Y.%m.%d-%H%M)"
+          UPSTREAM=$(cat out/meta/openwrt-head.txt)
+          ITB=openwrt-mediatek-filogic-bananapi_bpi-r4-squashfs-sysupgrade.itb
+          {
+            echo "# OpenWrt $TITLE_KIND — $(date +%Y-%m-%d)"
+            echo
+            echo "Upstream: \`${{ matrix.branch }}\` @ \`$UPSTREAM\`"
+            echo
+            echo "## Assets"
+            echo "- FULL itb: $(stat -c%s "out/$ITB") bytes, sha256 \`$(sha256sum "out/$ITB" | cut -d' ' -f1)\`"
+            if [ -f out/nand-sysupgrade.itb ]; then
+              echo "- NAND itb: $(stat -c%s out/nand-sysupgrade.itb) bytes, sha256 \`$(sha256sum out/nand-sysupgrade.itb | cut -d' ' -f1)\`"
+              echo "- NAND sdcard.img.gz: $(stat -c%s out/nand-sdcard.img.gz) bytes; unpacked $(cat out/meta/nand-unpacked-size.txt) bytes (< 128 MiB)"
+            fi
+            if [ -f out/extra-packages.tar.gz ]; then
+              echo "- extra-packages.tar.gz (NOT in the image: docker/compose, samba4, optional): $(stat -c%s out/extra-packages.tar.gz) bytes, sha256 \`$(sha256sum out/extra-packages.tar.gz | cut -d' ' -f1)\`"
+            fi
+            echo
+            echo "## Custom repo HEADs"
+            echo '```'
+            cat out/meta/repo-heads.txt
+            echo '```'
+            if [ -f out/meta/geodata-sha256.txt ]; then
+              echo "## Geodata (Loyalsoldier)"; echo '```'; cat out/meta/geodata-sha256.txt; echo '```'
+            fi
+            echo
+            echo "Safe defaults: all transparent proxies disabled on first boot (enable one intercept at a time); AdGuard Home default-on."
+            echo "Install / upgrade: see README. Optional packages: \`tar -xzf extra-packages.tar.gz -C /tmp/extra && apk add --allow-untrusted /tmp/extra/*.apk\` (use the archive from the SAME release as the image)."
+          } > body.md
+          ASSETS="out/$ITB out/openwrt-mediatek-filogic-bananapi_bpi-r4.manifest out/sha256sums"
+          if [ -f out/extra-packages.tar.gz ]; then ASSETS="$ASSETS out/extra-packages.tar.gz"; fi
+          if [ -f out/nand-sysupgrade.itb ]; then
+            ASSETS="$ASSETS out/nand-sysupgrade.itb out/nand-sdcard.img.gz out/nand.manifest out/nand.sha256sums"
+          fi
+          # shellcheck disable=SC2086
+          gh release create "$TAG" --repo "${{ github.repository }}" \
+            --title "OpenWrt $TITLE_KIND ($(date +%Y-%m-%d))" \
+            --notes-file body.md $PRERELEASE $ASSETS
+
+      - name: Retention (keep 3 per branch)
+        if: steps.check.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          PREFIX="master"
+          [ "${{ matrix.branch }}" = "openwrt-25.12" ] && PREFIX="25.12"
+          gh release list --repo "${{ github.repository }}" --limit 100 --json tagName \
+            --jq "[.[] | select(.tagName | startswith(\"$PREFIX-\"))][3:][].tagName" | \
+          while read -r tag; do
+            [ -n "$tag" ] || continue
+            gh release delete "$tag" --repo "${{ github.repository }}" --yes --cleanup-tag
+          done

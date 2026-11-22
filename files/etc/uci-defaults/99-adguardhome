@@ -1,0 +1,26 @@
+#!/bin/sh
+# AdGuard Home as the default DNS resolver: encrypted upstreams (DoH/DoQ)
+# plus ad filtering, working out of the box. Config is pre-seeded in
+# /etc/adguardhome/adguardhome.yaml (no baked credentials; the web UI asks
+# to create an admin password on first visit).
+#
+# Resource limits: memlimit is passed straight to GOMEMLIMIT (BYTES, despite
+# the package comment saying MB) -> 268435456 = 256 MiB soft limit.
+# maxprocs=2 -> GOMAXPROCS=2 (leave 2 cores for proxy/routing on MT7988).
+uci -q batch <<-EOF >/dev/null
+	set adguardhome.config.memlimit='268435456'
+	set adguardhome.config.maxprocs='2'
+	commit adguardhome
+EOF
+/etc/init.d/adguardhome enable
+
+# dnsmasq stays on :53 for LAN DHCP and .lan local zones; forward everything
+# else to AGH (127.0.0.1:5333). noresolv ignores WAN/ISP plain DNS.
+uci -q batch <<-EOF >/dev/null
+	set dhcp.@dnsmasq[0].noresolv='1'
+	del_list dhcp.@dnsmasq[0].server='127.0.0.1#5333'
+	add_list dhcp.@dnsmasq[0].server='127.0.0.1#5333'
+	commit dhcp
+EOF
+/etc/init.d/dnsmasq restart
+exit 0

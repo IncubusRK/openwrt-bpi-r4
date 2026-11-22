@@ -1,0 +1,9 @@
+#!/bin/sh
+# Default to the Argon theme on first boot after flashing.
+# Switch back via System -> Language and Style, or:
+#   uci set luci.main.mediaurlbase='/luci-static/bootstrap-dark'; uci commit luci
+uci -q batch <<-EOF >/dev/null
+	set luci.main.mediaurlbase='/luci-static/argon'
+	commit luci
+EOF
+exit 0

@@ -1,24 +1,27 @@
 #!/bin/bash
 #
-# Copyright (c) 2019-2020 P3TERX <https://p3terx.com>
+# diy-part1.sh — OpenWrt DIY script part 1 (before feeds update).
+# Runs inside the OpenWrt tree.
 #
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# File name: diy-part1.sh
-# Description: OpenWrt DIY script part 1 (Before Update feeds)
-#
+# Switch git.openwrt.org feed URLs to GitHub mirrors, PRESERVING the ";branch"
+# suffix (the openwrt-25.12 tree pins its feeds to ;openwrt-25.12 — dropping
+# the suffix would silently track the default branch instead).
+# Then append the passwall feeds (they have no release branches; ;main is
+# used for both master and 25.12 builds).
 
-# Uncomment a feed source
-#sed -i 's/^#\(.*helloworld\)/\1/' feeds.conf.default
+set -e
 
-# Add a feed source
-#echo 'src-git helloworld https://github.com/fw876/helloworld' >>feeds.conf.default
-#echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
+sed -i 's|https://git.openwrt.org/feed/packages.git|https://github.com/openwrt/packages.git|' feeds.conf.default
+sed -i 's|https://git.openwrt.org/project/luci.git|https://github.com/openwrt/luci.git|' feeds.conf.default
+sed -i 's|https://git.openwrt.org/feed/routing.git|https://github.com/openwrt/routing.git|' feeds.conf.default
+sed -i 's|https://git.openwrt.org/feed/telephony.git|https://github.com/openwrt/telephony.git|' feeds.conf.default
+sed -i 's|https://git.openwrt.org/feed/video.git|https://github.com/openwrt/video.git|' feeds.conf.default
 
-# Switch mirrors
-sed -i 's|src-git packages https://git.openwrt.org/feed/packages.git|src-git packages https://github.com/openwrt/packages.git|' feeds.conf.default
-sed -i 's|src-git luci https://git.openwrt.org/project/luci.git|src-git luci https://github.com/openwrt/luci.git|' feeds.conf.default
-sed -i 's|src-git routing https://git.openwrt.org/feed/routing.git|src-git routing https://github.com/openwrt/routing.git|' feeds.conf.default
-sed -i 's|src-git telephony https://git.openwrt.org/feed/telephony.git|src-git telephony https://github.com/openwrt/telephony.git|' feeds.conf.default
+grep -q '^src-git passwall_packages ' feeds.conf.default || \
+	echo 'src-git passwall_packages https://github.com/Openwrt-Passwall/openwrt-passwall-packages.git;main' >> feeds.conf.default
+grep -q '^src-git passwall_luci ' feeds.conf.default || \
+	echo 'src-git passwall_luci https://github.com/Openwrt-Passwall/openwrt-passwall.git;main' >> feeds.conf.default
+grep -q '^src-git passwall2_luci ' feeds.conf.default || \
+	echo 'src-git passwall2_luci https://github.com/Openwrt-Passwall/openwrt-passwall2.git;main' >> feeds.conf.default
+
+cat feeds.conf.default

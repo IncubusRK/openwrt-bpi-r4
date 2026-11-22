@@ -1,0 +1,200 @@
+http:
+  doh:
+    routes:
+      - GET /dns-query
+      - POST /dns-query
+      - GET /dns-query/{ClientID}
+      - POST /dns-query/{ClientID}
+    insecure_enabled: false
+  pprof:
+    port: 6060
+    enabled: false
+  address: 0.0.0.0:3000
+  session_ttl: 30d
+users: []
+auth_attempts: 5
+block_auth_min: 15
+http_proxy: ""
+language: ""
+theme: auto
+dns:
+  edns_client_subnet:
+    custom_ip: ""
+    enabled: false
+    use_custom: false
+  pending_requests:
+    enabled: true
+  ipset_file: ""
+  upstream_dns_file: ""
+  upstream_mode: load_balance
+  bind_hosts:
+    - 127.0.0.1
+  ratelimit_whitelist: []
+  dns64_prefixes: []
+  private_networks: []
+  trusted_proxies:
+    - 127.0.0.0/8
+    - ::1/128
+  allowed_clients: []
+  blocked_hosts: []
+  bogus_nxdomain: []
+  bootstrap_dns:
+    - 9.9.9.9
+    - 8.8.8.8
+  disallowed_clients: []
+  fallback_dns:
+    - https://1.0.0.1/dns-query
+    - https://8.8.4.4/dns-query
+  ipset: []
+  local_ptr_upstreams:
+    - 127.0.0.1:53
+  upstream_dns:
+    - https://1.1.1.1/dns-query
+    - https://8.8.8.8/dns-query
+    - https://9.9.9.9/dns-query
+    - https://dns.adguard-dns.com/dns-query
+    - quic://dns.adguard-dns.com
+    - quic://9.9.9.9
+    - '[/lan/]127.0.0.1:53'
+  cache_optimistic_answer_ttl: 30s
+  cache_optimistic_max_age: 12h
+  fastest_timeout: 1s
+  upstream_timeout: 10s
+  max_goroutines: 300
+  ratelimit_subnet_len_ipv4: 24
+  ratelimit_subnet_len_ipv6: 56
+  cache_ttl_max: 0
+  cache_ttl_min: 0
+  cache_size: 8388608
+  ratelimit: 20
+  port: 5333
+  aaaa_disabled: false
+  anonymize_client_ip: false
+  bootstrap_prefer_ipv6: false
+  cache_enabled: true
+  cache_optimistic: true
+  enable_dnssec: true
+  handle_ddr: true
+  hostsfile_enabled: true
+  refuse_any: true
+  serve_http3: false
+  serve_plain_dns: true
+  use_dns64: false
+  use_http3_upstreams: false
+  use_private_ptr_resolvers: true
+tls:
+  enabled: false
+  server_name: ""
+  force_https: false
+  port_https: 443
+  port_dns_over_tls: 853
+  port_dns_over_quic: 853
+  port_dnscrypt: 0
+  dnscrypt_config_file: ""
+  certificate_chain: ""
+  private_key: ""
+  certificate_path: ""
+  private_key_path: ""
+  strict_sni_check: false
+querylog:
+  dir_path: ""
+  ignored: []
+  interval: 1d
+  size_memory: 1000
+  enabled: true
+  file_enabled: true
+  ignored_enabled: false
+statistics:
+  dir_path: ""
+  ignored: []
+  interval: 1d
+  enabled: true
+  ignored_enabled: false
+filters:
+  - enabled: true
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_1.txt
+    name: AdGuard DNS filter
+    id: 1
+  - enabled: true
+    url: https://adguardteam.github.io/HostlistsRegistry/assets/filter_2.txt
+    name: AdAway Default Blocklist
+    id: 2
+  - enabled: true
+    url: https://filters.adtidy.org/extension/ublock/filters/1.txt
+    name: AdGuard Russian filter
+    id: 3
+whitelist_filters: []
+user_rules: []
+dhcp:
+  dhcpv4:
+    gateway_ip: ""
+    range_start: ""
+    range_end: ""
+    subnet_mask: ""
+    options: []
+    icmp_timeout_msec: 1000
+    lease_duration: 86400
+  dhcpv6:
+    range_start: ""
+    lease_duration: 86400
+    ra_slaac_only: false
+    ra_allow_slaac: false
+  interface_name: ""
+  local_domain_name: lan
+  enabled: false
+filtering:
+  blocking_ipv4: ""
+  blocking_ipv6: ""
+  blocked_services:
+    schedule:
+      time_zone: Local
+    ids: []
+  protection_disabled_until: null
+  safe_search:
+    enabled: false
+    bing: true
+    duckduckgo: true
+    ecosia: true
+    google: true
+    pixabay: true
+    yandex: true
+    youtube: true
+  blocking_mode: default
+  parental_block_host: family-block.dns.adguard.com
+  safebrowsing_block_host: standard-block.dns.adguard.com
+  rewrites: []
+  safe_fs_patterns: []
+  max_http_size: 256MB
+  safebrowsing_cache_size: 1048576
+  safesearch_cache_size: 1048576
+  parental_cache_size: 1048576
+  cache_time: 30
+  filters_update_interval: 24
+  blocked_response_ttl: 10
+  filtering_enabled: true
+  rewrites_enabled: true
+  parental_enabled: false
+  safebrowsing_enabled: false
+  protection_enabled: true
+clients:
+  runtime_sources:
+    whois: true
+    arp: true
+    rdns: true
+    dhcp: true
+    hosts: true
+  persistent: []
+log:
+  file: ""
+  max_age: 3
+  max_backups: 0
+  max_size: 100
+  compress: false
+  enabled: true
+  local_time: false
+  verbose: false
+os:
+  group: ""
+  user: ""
+  rlimit_nofile: 0
+schema_version: 35

@@ -25,3 +25,6 @@ Desktop.ini
 *~
 # ucode compile test output
 uc.out*
+
+# geodata is downloaded at build time (diy-part2.sh), never committed
+/files/usr/share/v2ray/

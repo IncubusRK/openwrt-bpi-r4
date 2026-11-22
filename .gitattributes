@@ -1,7 +1,14 @@
-# Нормализация EOL: в репозитории всегда LF, рабочая копия — нативная.
+# Normalize line endings: LF in the repository; scripts/configs LF everywhere
+# (uci-defaults and shell scripts are executed on the router / in CI).
 * text=auto
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.json text eol=lf
+*.config text eol=lf
+files/etc/uci-defaults/* text eol=lf
 
-# Бинарные артефакты (если вдруг появятся в дереве)
+# Binary artifacts (must never appear in the tree)
 *.itb binary
 *.img binary
 *.img.gz binary

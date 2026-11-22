@@ -1,0 +1,13 @@
+#!/bin/sh
+# Safe first-boot defaults: transparent-proxy apps stay disabled until
+# configured via LuCI. Their nftables redirect/tproxy rules hijack LAN
+# traffic and break internet when no core is running (issues #19).
+# DNS baseline is AdGuard Home (enabled by 99-adguardhome). Enable proxies
+# one at a time via LuCI -- only one active intercept is allowed.
+/etc/init.d/homeproxy disable
+/etc/init.d/podkop disable
+/etc/init.d/openclash disable
+/etc/init.d/xray_core disable
+# mwan3: multi-WAN stays disabled until a second ISP is configured
+/etc/init.d/mwan3 disable
+exit 0

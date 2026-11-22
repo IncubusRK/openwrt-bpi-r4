@@ -1,60 +1,84 @@
+# Update Checker — daily upstream/custom-repo HEAD check per branch.
 #
-# Copyright (c) 2019-2021 P3TERX <https://p3terx.com>
+# For each build branch (master, openwrt-25.12) collects the OpenWrt HEAD plus
+# the HEADs of all custom package repos, hashes the composite and compares it
+# with the cached value. On change -> repository_dispatch "upstream-update"
+# {branch} which triggers build.yml for that branch only.
 #
-# This is free software, licensed under the MIT License.
-# See /LICENSE for more information.
-#
-# https://github.com/P3TERX/Actions-OpenWrt
-# File: .github/workflows/update-checker.yml
-# Description: Source code update checker
-#
+# repository_dispatch created with GITHUB_TOKEN DOES trigger workflows
+# (exception to the GITHUB_TOKEN recursion rule) — no PAT required.
+# Cron 00:00 UTC = 03:00 MSK.
 
 name: Update Checker
 
-env:
-  REPO_URL: https://github.com/openwrt/openwrt
-  REPO_BRANCH: master
-
 on:
-  workflow_dispatch:
   schedule:
-    - cron: 0 0 * * *
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write
 
 jobs:
   check:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [master, openwrt-25.12]
 
     steps:
-      - name: Get Commit Hash
-        id: getHash
+      - name: Collect HEADs
+        id: heads
         run: |
-          git clone --depth 1 $REPO_URL -b $REPO_BRANCH .
-          echo "commitHash=$(git rev-parse HEAD)" >> $GITHUB_OUTPUT
+          set -eu
+          UP=$(git ls-remote https://github.com/openwrt/openwrt "refs/heads/${{ matrix.branch }}" | cut -f1)
+          [ -n "$UP" ] || { echo "upstream branch not found" >&2; exit 1; }
+          COMPOSITE="$UP"
+          for r in \
+            vernesong/OpenClash \
+            itdoginfo/podkop \
+            1andrevich/homeproxy-hiddify \
+            yichya/luci-app-xray \
+            jerrykuku/luci-theme-argon \
+            1andrevich/zapret2-openwrt \
+            slava-shchipunov/awg-openwrt \
+            IncubusRK/luci-app-geodata \
+            IncubusRK/luci-app-naiveproxy \
+            IncubusRK/openwrt-mieru \
+            lisaac/luci-app-diskman
+          do
+            H=$(git ls-remote "https://github.com/$r" HEAD | cut -f1)
+            COMPOSITE="$COMPOSITE-$H"
+          done
+          HASH=$(printf '%s' "$COMPOSITE" | sha256sum | cut -d' ' -f1)
+          echo "upstream=$UP" >> "$GITHUB_OUTPUT"
+          echo "hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "branch=${{ matrix.branch }} upstream=$UP composite=$HASH"
 
-      - name: Compare Commit Hash
-        id: cacheHash
-        uses: actions/cache@v3
+      - name: Lookup previous hash
+        id: cache
+        uses: actions/cache/restore@v4
         with:
-          path: .commitHash
-          key: HEAD-${{ steps.getHash.outputs.commitHash }}
+          path: .checker-hash
+          key: checker-${{ matrix.branch }}-${{ steps.heads.outputs.hash }}
+          lookup-only: true
 
-      - name: Save New Commit Hash
-        if: steps.cacheHash.outputs.cache-hit != 'true'
+      - name: Trigger build on change
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo ${{ steps.getHash.outputs.commitHash }} | tee .commitHash
+          gh api "repos/${{ github.repository }}/dispatches" \
+            -f event-type=upstream-update \
+            -f 'client_payload[branch]=${{ matrix.branch }}'
+          echo "${{ steps.heads.outputs.hash }}" > .checker-hash
 
-      - name: Trigger build
-        if: steps.cacheHash.outputs.cache-hit != 'true'
-        uses: peter-evans/repository-dispatch@v2
+      - name: Save new hash
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
-          event-type: Source Code Update
-
-      - name: Delete workflow runs
-        uses: GitRML/delete-workflow-runs@main
-        with:
-          token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
-          retain_days: 2
-          keep_minimum_runs: 2
+          path: .checker-hash
+          key: checker-${{ matrix.branch }}-${{ steps.heads.outputs.hash }}

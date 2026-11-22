@@ -1,0 +1,15 @@
+{
+	"luci-file-rpc": {
+		"description": "Allow LuCI JS fs.* RPC methods through the uhttpd ubus-scope pre-check. Actual paths and executables remain restricted by the per-application file-scope ACLs.",
+		"read": {
+			"ubus": {
+				"file": [ "read", "list", "stat", "lstat", "md5", "exec" ]
+			}
+		},
+		"write": {
+			"ubus": {
+				"file": [ "write", "remove" ]
+			}
+		}
+	}
+}
