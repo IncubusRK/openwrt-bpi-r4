@@ -46,25 +46,43 @@ env:
   TZ: Europe/Moscow
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      legs: ${{ steps.plan.outputs.legs }}
+      branches: ${{ steps.plan.outputs.branches }}
+    steps:
+      - name: Compute build matrix
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          DISPATCH_BRANCH: ${{ github.event.client_payload.branch }}
+          INPUT_BRANCH: ${{ inputs.branch }}
+        run: |
+          set -eu
+          ALL='[{"branch":"master","variant":"full","seed":"seeds/full-master.config"},{"branch":"openwrt-25.12","variant":"full","seed":"seeds/full-2512.config"},{"branch":"openwrt-25.12","variant":"nand","seed":"seeds/nand-2512.config"}]'
+          WANT=""
+          if [ "$EVENT" = repository_dispatch ]; then WANT="$DISPATCH_BRANCH"; fi
+          if [ "$EVENT" = workflow_dispatch ]; then WANT="$INPUT_BRANCH"; fi
+          if [ "$EVENT" = push ] || [ "$WANT" = all ] || [ -z "$WANT" ]; then
+            LEGS="$ALL"
+          else
+            LEGS=$(printf '%s' "$ALL" | jq -c --arg b "$WANT" '[.[] | select(.branch == $b)]')
+          fi
+          BRANCHES=$(printf '%s' "$LEGS" | jq -c '[.[].branch] | unique')
+          echo "legs=$LEGS" >> "$GITHUB_OUTPUT"
+          echo "branches=$BRANCHES" >> "$GITHUB_OUTPUT"
+          echo "legs: $LEGS"
+
   build:
+    needs: plan
     runs-on: ubuntu-24.04
     timeout-minutes: 350
-    if: >-
-      (github.event_name != 'repository_dispatch' || github.event.client_payload.branch == matrix.branch) &&
-      (github.event_name != 'workflow_dispatch' || inputs.branch == 'all' || inputs.branch == matrix.branch)
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - branch: master
-            variant: full
-            seed: seeds/full-master.config
-          - branch: openwrt-25.12
-            variant: full
-            seed: seeds/full-2512.config
-          - branch: openwrt-25.12
-            variant: nand
-            seed: seeds/nand-2512.config
+        include: ${{ fromJSON(needs.plan.outputs.legs) }}
     concurrency:
       group: build-${{ matrix.branch }}-${{ matrix.variant }}
       cancel-in-progress: false
@@ -203,17 +221,14 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [plan, build]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    if: >-
-      always() &&
-      (github.event_name != 'repository_dispatch' || github.event.client_payload.branch == matrix.branch) &&
-      (github.event_name != 'workflow_dispatch' || inputs.branch == 'all' || inputs.branch == matrix.branch)
+    if: always() && needs.plan.result == 'success'
     strategy:
       fail-fast: false
       matrix:
-        branch: [master, openwrt-25.12]
+        branch: ${{ fromJSON(needs.plan.outputs.branches) }}
     concurrency:
       group: release-${{ matrix.branch }}
       cancel-in-progress: false
