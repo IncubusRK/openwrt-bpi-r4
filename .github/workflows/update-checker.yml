@@ -8,6 +8,10 @@
 # repository_dispatch created with GITHUB_TOKEN DOES trigger workflows
 # (exception to the GITHUB_TOKEN recursion rule) — no PAT required.
 # Cron 00:00 UTC = 03:00 MSK.
+#
+# workflow_dispatch with dry_run=true computes the composite hash, writes the
+# hash file and saves the cache entry, but does NOT send repository_dispatch.
+# Use it once to bootstrap an empty checker cache without triggering ~3h builds.
 
 name: Update Checker
 
@@ -15,6 +19,11 @@ on:
   schedule:
     - cron: '0 0 * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Compute and cache the hash, but do NOT dispatch a build'
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -54,6 +63,9 @@ jobs:
             COMPOSITE="$COMPOSITE-$H"
           done
           HASH=$(printf '%s' "$COMPOSITE" | sha256sum | cut -d' ' -f1)
+          # lookup-only restore leaves the path empty — safe to write it here.
+          # The hash file must exist even on a dry run so cache/save succeeds.
+          printf '%s' "$HASH" > .checker-hash
           echo "upstream=$UP" >> "$GITHUB_OUTPUT"
           echo "hash=$HASH" >> "$GITHUB_OUTPUT"
           echo "branch=${{ matrix.branch }} upstream=$UP composite=$HASH"
@@ -67,14 +79,17 @@ jobs:
           lookup-only: true
 
       - name: Trigger build on change
-        if: steps.cache.outputs.cache-hit != 'true'
+        if: steps.cache.outputs.cache-hit != 'true' && inputs.dry_run != true
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh api "repos/${{ github.repository }}/dispatches" \
             -f event-type=upstream-update \
             -f 'client_payload[branch]=${{ matrix.branch }}'
-          echo "${{ steps.heads.outputs.hash }}" > .checker-hash
+
+      - name: Dry run — skip dispatch
+        if: steps.cache.outputs.cache-hit != 'true' && inputs.dry_run == true
+        run: echo "dry_run=true — hash saved to cache, no repository_dispatch sent"
 
       - name: Save new hash
         if: steps.cache.outputs.cache-hit != 'true'
