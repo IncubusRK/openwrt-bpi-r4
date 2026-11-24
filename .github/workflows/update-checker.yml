@@ -83,8 +83,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # REST API field is event_type (underscore); "event-type" gives HTTP 422.
           gh api "repos/${{ github.repository }}/dispatches" \
-            -f event-type=upstream-update \
+            -f event_type=upstream-update \
             -f 'client_payload[branch]=${{ matrix.branch }}'
 
       - name: Dry run — skip dispatch
