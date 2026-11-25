@@ -1,0 +1,443 @@
+#!/bin/sh
+# awgimport - decode an AmneziaVPN vpn:// link into an AmneziaWG config
+# and/or a netifd (uci) block for luci-proto-amneziawg.
+#
+# Link format: "vpn://" + base64url( uint32be(len(json)) || zlib(json) ).
+# The JSON wraps one container per protocol:
+#   {"containers":[{"container":"amnezia-awg",
+#                   "awg":{"last_config":"<json string or object>"}}]}
+# last_config holds the wg-quick text in "config" plus the AmneziaWG
+# obfuscation parameters (Jc, Jmin, Jmax, S1..S4, H1..H4, I1..I5, ...) as
+# separate fields. Those parameters must end up inside [Interface], because
+# luci-proto-amneziawg reads them from there (interface_jc -> awg_jc).
+#
+# Exit codes: 0 ok, 2 usage, 3 bad base64, 4 unpack/JSON/config error,
+#             5 no *awg* container in the link, 6 missing tool.
+
+set -u
+
+PROG=${0##*/}
+IFACE=awg0
+MODE=both
+APPLY=0
+SRC=
+
+die() {
+	_code=$1
+	shift
+	printf '%s: %s\n' "$PROG" "$*" >&2
+	exit "$_code"
+}
+
+usage() {
+	cat <<'EOF'
+Usage: awgimport [options] <link|file|->
+
+Decode an AmneziaVPN vpn:// link into an AmneziaWG config / uci block.
+
+Options:
+  -i, --iface NAME    UCI section name (default: awg0)
+      --conf          stdout: config only, no comments (used by LuCI)
+      --uci           stdout: uci commands only
+      --both          (default) header comment + config + uci commands
+      --apply         apply the uci block (uci batch + commit + ifup)
+      --no-config     same as --uci
+  -h, --help          this help
+
+The link may be given as an argument, in a file, or on stdin ("-").
+EOF
+}
+
+while [ $# -gt 0 ]; do
+	case $1 in
+		-i|--iface)
+			[ $# -ge 2 ] || die 2 "option $1 needs an argument"
+			IFACE=$2
+			shift 2
+			;;
+		--conf)      MODE=conf; shift ;;
+		--uci)       MODE=uci; shift ;;
+		--both)      MODE=both; shift ;;
+		--no-config) MODE=uci; shift ;;
+		--apply)     APPLY=1; shift ;;
+		-h|--help)   usage; exit 0 ;;
+		--)
+			shift
+			[ $# -ge 1 ] || die 2 "missing link"
+			SRC=$1
+			shift
+			break
+			;;
+		-)
+			[ -z "$SRC" ] || die 2 "unexpected argument: -"
+			SRC=-
+			shift
+			;;
+		-*)
+			die 2 "unknown option: $1 (see --help)"
+			;;
+		*)
+			[ -z "$SRC" ] || die 2 "unexpected argument: $1"
+			SRC=$1
+			shift
+			;;
+	esac
+done
+
+[ -n "$SRC" ] || die 2 "no link given (see --help)"
+
+case $IFACE in
+	''|*[!A-Za-z0-9_]*) die 2 "invalid interface name: $IFACE" ;;
+esac
+
+[ "$APPLY" = 1 ] && [ "$MODE" = conf ] && \
+	die 2 "--apply cannot be combined with --conf"
+
+need_tool() {
+	command -v "$1" >/dev/null 2>&1 || die 6 "missing tool: $1"
+}
+
+need_tool base64
+need_tool pigz
+need_tool jq
+[ "$APPLY" = 1 ] && need_tool uci
+
+# --- read the source ---------------------------------------------------------
+case $SRC in
+	-)
+		raw=$(cat)
+		;;
+	*)
+		if [ -f "$SRC" ]; then
+			raw=$(cat -- "$SRC") || die 2 "cannot read file: $SRC"
+		else
+			raw=$SRC
+		fi
+		;;
+esac
+
+# --- decode vpn://link -------------------------------------------------------
+raw=$(printf '%s' "$raw" | tr -d '[:space:]')
+case $raw in
+	vpn://*) b=${raw#vpn://} ;;
+	*) die 2 "not a vpn:// link" ;;
+esac
+
+# base64url -> base64 (two tr calls: "tr '\-_'" means different sets in
+# busybox and GNU tr, so keep every set unambiguous)
+b=$(printf '%s' "$b" | tr '_' '/' | tr '-' '+')
+case $b in
+	*[!A-Za-z0-9+/=]*) die 3 "invalid base64url data" ;;
+esac
+
+r=$(( ${#b} % 4 ))
+case $r in
+	0) ;;
+	1) die 3 "invalid base64 length" ;;
+	2) b="${b}==" ;;
+	3) b="${b}=" ;;
+esac
+
+tmpd=$(mktemp -d "${TMPDIR:-/tmp}/awgimport.XXXXXX") || die 4 "cannot create temp dir"
+trap 'rm -rf "$tmpd"' 0
+trap 'exit 130' 1 2 15
+
+printf '%s' "$b" | base64 -d > "$tmpd/raw" 2>/dev/null || die 3 "base64 decode failed"
+sz=$(wc -c < "$tmpd/raw" | tr -d ' ')
+[ "$sz" -ge 5 ] 2>/dev/null || die 3 "link payload is truncated"
+
+# The 4-byte big-endian size prefix is skipped; pigz auto-detects zlib.
+tail -c +5 "$tmpd/raw" | pigz -dc > "$tmpd/json" 2>"$tmpd/zlib.err" || {
+	cat "$tmpd/zlib.err" >&2
+	die 4 "zlib decompression failed"
+}
+
+jq -e . "$tmpd/json" >/dev/null 2>&1 || die 4 "invalid JSON payload"
+
+# --- pick the AmneziaWG container -------------------------------------------
+lc=$(jq -c '
+	first(.containers[]?
+		| select((((.container // "") | tostring) | test("awg"; "i"))
+		         or ((.awg? // null) != null))
+		| .awg.last_config) // empty
+' "$tmpd/json" 2>/dev/null) || die 4 "cannot parse containers"
+
+[ -n "$lc" ] || die 5 "no *awg* container in this link (looks like VLESS/xray: use podkop for it)"
+
+cfg=$(printf '%s' "$lc" | jq -c '
+	if type == "string" then (fromjson? // empty)
+	elif type == "object" then .
+	else empty end
+' 2>/dev/null) || die 4 "last_config is not valid JSON"
+[ -n "$cfg" ] || die 4 "last_config is not valid JSON"
+printf '%s' "$cfg" | jq -e 'type == "object"' >/dev/null 2>&1 || \
+	die 4 "last_config is not a JSON object"
+
+conf=$(printf '%s' "$cfg" | jq -r '.config // empty' 2>/dev/null) || \
+	die 4 "cannot read config from last_config"
+[ -n "$conf" ] || die 4 "no config text in the awg container"
+
+# Normalize CRLF and drop trailing blank lines.
+conf=$(printf '%s\n' "$conf" | tr -d '\r')
+
+printf '%s\n' "$conf" | grep -qiE '^[[:space:]]*\[interface\][[:space:]]*$' || \
+	die 4 "config has no [Interface] section"
+
+# --- obfuscation parameters from the JSON ------------------------------------
+# Emitted as "Key<TAB>value"; the keys keep the spelling awg-quick expects.
+obf=$(printf '%s' "$cfg" | jq -r --arg ks 'Jc Jmin Jmax S1 S2 S3 S4 H1 H2 H3 H4 I1 I2 I3 I4 I5 HeaderProtectionKey ContentPaddingAddition RekeyAfterTime RekeyTimeout RejectAfterTime KeepaliveTimeout MaxHandshakeAttempts RandomTrailers DisableCookies' '
+	($ks | split(" ")) as $keys
+	| . as $o
+	| $keys[]
+	| . as $k
+	| first($o | to_entries[]
+		| select((.key | ascii_downcase) == ($k | ascii_downcase))
+		| .value) as $v
+	| select($v != null)
+	| if $v == true then "1" elif $v == false then "0" else ($v | tostring) end as $s
+	| select($s != "")
+	| "\($k)\t\($s)"
+' 2>/dev/null) || die 4 "cannot read obfuscation parameters"
+
+# --- merge the parameters into [Interface] ----------------------------------
+# Existing keys (case-insensitive) are never duplicated.
+conf_new=$(printf '%s\n' "$conf" | awk -v obf="$obf" '
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+{ L[NR] = $0 }
+END {
+	hdr = 0
+	for (i = 1; i <= NR; i++) {
+		t = tolower(trim(L[i]))
+		if (substr(t, 1, 1) == "[" && t == "[interface]") { hdr = i; break }
+	}
+	if (!hdr) exit 4
+	for (i = hdr + 1; i <= NR; i++) {
+		if (L[i] ~ /^[ \t]*\[/) break
+		if (index(L[i], "=") == 0) continue
+		k = substr(L[i], 1, index(L[i], "=") - 1)
+		have[tolower(trim(k))] = 1
+	}
+	n = split(obf, O, "\n")
+	for (i = 1; i <= NR; i++) {
+		print L[i]
+		if (i != hdr) continue
+		for (j = 1; j <= n; j++) {
+			if (O[j] == "") continue
+			p = index(O[j], "\t")
+			if (!p) continue
+			key = substr(O[j], 1, p - 1)
+			val = substr(O[j], p + 1)
+			if (tolower(key) in have) continue
+			print key " = " val
+		}
+	}
+}
+') || die 4 "config has no [Interface] section"
+
+# --- uci block ---------------------------------------------------------------
+# One command per line, values single-quoted: the same text is a valid shell
+# script and a valid "uci batch" stream. The leading "uci" and "-q" are only
+# added when printing (uci batch takes bare commands).
+batch=$(printf '%s\n' "$conf_new" | awk -v iface="$IFACE" -v wf="$tmpd/warn" '
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+function sq(s,   r, i, c) {
+	r = ""
+	for (i = 1; i <= length(s); i++) {
+		c = substr(s, i, 1)
+		if (c == "\047") r = r "\047\\\047\047"
+		else r = r c
+	}
+	return "\047" r "\047"
+}
+function parse_ep(ep,   s, i, rest, nc, t) {
+	EP_HOST = ep; EP_PORT = ""
+	if (substr(ep, 1, 1) != "[") {
+		nc = split(ep, t, ":") - 1
+		if (nc == 1) {
+			EP_HOST = ep; sub(/:.*$/, "", EP_HOST)
+			EP_PORT = ep; sub(/^.*:/, "", EP_PORT)
+		}
+		return
+	}
+	s = substr(ep, 2)
+	i = index(s, "]")
+	if (i > 0) {
+		EP_HOST = substr(s, 1, i - 1)
+		rest = substr(s, i + 1)
+		sub(/^:/, "", rest)
+		EP_PORT = rest
+	}
+}
+BEGIN {
+	n = split("jc awg_jc jmin awg_jmin jmax awg_jmax " \
+	          "s1 awg_s1 s2 awg_s2 s3 awg_s3 s4 awg_s4 " \
+	          "h1 awg_h1 h2 awg_h2 h3 awg_h3 h4 awg_h4 " \
+	          "i1 awg_i1 i2 awg_i2 i3 awg_i3 i4 awg_i4 i5 awg_i5 " \
+	          "headerprotectionkey awg_header_protection_key " \
+	          "contentpaddingaddition awg_content_padding_addition " \
+	          "rekeyaftertime awg_rekey_after_time " \
+	          "rekeytimeout awg_rekey_timeout " \
+	          "rejectaftertime awg_reject_after_time " \
+	          "keepalivetimeout awg_keepalive_timeout " \
+	          "maxhandshakeattempts awg_max_handshake_attempts " \
+	          "randomtrailers awg_random_trailers " \
+	          "disablecookies awg_disable_cookies", t, " ")
+	for (i = 1; i < n; i += 2) OBF[t[i]] = t[i + 1]
+	OBFORDER = "awg_jc awg_jmin awg_jmax awg_s1 awg_s2 awg_s3 awg_s4 " \
+	           "awg_h1 awg_h2 awg_h3 awg_h4 " \
+	           "awg_i1 awg_i2 awg_i3 awg_i4 awg_i5 " \
+	           "awg_header_protection_key awg_content_padding_addition " \
+	           "awg_rekey_after_time awg_rekey_timeout awg_reject_after_time " \
+	           "awg_keepalive_timeout awg_max_handshake_attempts " \
+	           "awg_random_trailers awg_disable_cookies"
+}
+{
+	line = $0
+	if (line ~ /^[ \t]*\[/) {
+		name = line
+		sub(/^[ \t]*\[/, "", name)
+		sub(/\][ \t]*$/, "", name)
+		sec = tolower(trim(name))
+		if (sec == "peer") pidx = ++npeer
+		next
+	}
+	if (sec == "" || index(line, "=") == 0) next
+	p = index(line, "=")
+	k = tolower(trim(substr(line, 1, p - 1)))
+	v = trim(substr(line, p + 1))
+	if (v == "") next
+
+	if (sec == "interface") {
+		if (k == "privatekey") IF["private_key"] = v
+		else if (k == "listenport") IF["listen_port"] = v
+		else if (k == "mtu") IF["mtu"] = v
+		else if (k == "fwmark") IF["fwmark"] = v
+		else if (k == "address" || k == "dns") {
+			nn = split(v, tmp, ",")
+			for (x = 1; x <= nn; x++) {
+				tv = trim(tmp[x])
+				if (tv == "") continue
+				if (k == "address") ADDR[++naddr] = tv
+				else DNSS[++ndnss] = tv
+			}
+		} else if (k in OBF) IF[OBF[k]] = v
+	} else if (sec == "peer" && pidx > 0) {
+		P_OK[pidx] = 1
+		if (k == "publickey") P_PUB[pidx] = v
+		else if (k == "presharedkey") P_PSK[pidx] = v
+		else if (k == "endpoint") P_EP[pidx] = v
+		else if (k == "persistentkeepalive") P_KA[pidx] = v
+		else if (k == "allowedips") {
+			nn = split(v, tmp, ",")
+			for (x = 1; x <= nn; x++) {
+				tv = trim(tmp[x])
+				if (tv == "") continue
+				P_AIP[pidx, ++P_NAIP[pidx]] = tv
+				if ((tv == "0.0.0.0/0" || tv == "::/0") && !WARNED) {
+					print "full tunnel (" tv "): all traffic goes through the peer" > wf
+					WARNED = 1
+				}
+			}
+		}
+	}
+}
+END {
+	if (!("private_key" in IF))
+		print "interface has no PrivateKey" > wf
+
+	print "delete network." iface
+	print "set network." iface "=interface"
+	print "set network." iface ".proto=" sq("amneziawg")
+
+	n = split("private_key listen_port mtu fwmark", ord, " ")
+	for (i = 1; i <= n; i++)
+		if (ord[i] in IF) print "set network." iface "." ord[i] "=" sq(IF[ord[i]])
+
+	for (i = 1; i <= naddr; i++)
+		print "add_list network." iface ".addresses=" sq(ADDR[i])
+
+	n = split(OBFORDER, ord, " ")
+	for (i = 1; i <= n; i++)
+		if (ord[i] in IF) print "set network." iface "." ord[i] "=" sq(IF[ord[i]])
+
+	for (i = 1; i <= ndnss; i++)
+		print "add_list network." iface ".dns=" sq(DNSS[i])
+
+	for (p = 1; p <= npeer; p++) {
+		if (!(p in P_OK)) continue
+		s = iface "_peer" (p > 1 ? p : "")
+		print "set network." s "=amneziawg_" iface
+		if (P_PUB[p] != "")
+			print "set network." s ".public_key=" sq(P_PUB[p])
+		if (P_PSK[p] != "")
+			print "set network." s ".preshared_key=" sq(P_PSK[p])
+		for (i = 1; i <= P_NAIP[p]; i++)
+			print "add_list network." s ".allowed_ips=" sq(P_AIP[p, i])
+		if (P_NAIP[p] > 0)
+			print "set network." s ".route_allowed_ips=" sq("1")
+		if (P_EP[p] != "") {
+			parse_ep(P_EP[p])
+			print "set network." s ".endpoint_host=" sq(EP_HOST)
+			if (EP_PORT != "")
+				print "set network." s ".endpoint_port=" sq(EP_PORT)
+		}
+		if (P_KA[p] != "")
+			print "set network." s ".persistent_keepalive=" sq(P_KA[p])
+	}
+
+	print "commit network"
+}
+') || die 4 "cannot build the uci block"
+
+[ -n "$batch" ] || die 4 "empty uci block"
+
+uci_print() {
+	printf '%s\n' "$batch" | awk '
+		{ if ($1 == "delete") print "uci -q " $0; else print "uci " $0 }
+	'
+	[ "$APPLY" = 1 ] && printf 'ifup %s\n' "$IFACE"
+	return 0
+}
+
+warn_comment() {
+	[ -s "$tmpd/warn" ] || return 0
+	while IFS= read -r w; do
+		printf '# WARNING: %s\n' "$w"
+	done < "$tmpd/warn"
+}
+
+warn_stderr() {
+	[ -s "$tmpd/warn" ] || return 0
+	while IFS= read -r w; do
+		printf '%s: warning: %s\n' "$PROG" "$w" >&2
+	done < "$tmpd/warn"
+}
+
+case $MODE in
+	conf)
+		warn_stderr
+		printf '%s\n' "$conf_new"
+		;;
+	uci)
+		warn_stderr
+		uci_print
+		;;
+	both)
+		printf '# %s: interface %s from an AmneziaVPN link\n' "$PROG" "$IFACE"
+		warn_comment
+		printf '# --- awg-quick config ---\n'
+		printf '%s\n' "$conf_new"
+		printf '# --- uci ---\n'
+		uci_print
+		;;
+esac
+
+if [ "$APPLY" = 1 ]; then
+	printf '%s\n' "$batch" | uci batch || die 1 "uci batch failed"
+	got=$(uci -q get "network.$IFACE.proto" 2>/dev/null || true)
+	[ "$got" = amneziawg ] || \
+		die 1 "apply failed: network.$IFACE.proto is '${got:-unset}'"
+	ifup "$IFACE" || die 1 "ifup $IFACE failed"
+fi
+
+exit 0

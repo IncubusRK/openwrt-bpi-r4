@@ -1,0 +1,68 @@
+'use strict';
+
+// rpcd/ubus glue: awglink.decode { link, iface } -> { ok, config | error }
+// All decoding lives in /usr/bin/awgimport; this plugin only validates the
+// arguments and runs the helper as an argv array (no shell, no interpolation).
+// Arguments are restricted to [A-Za-z0-9_=-] before use, so even the quoted
+// fallback command string used on old ucode builds cannot inject anything.
+
+let fs = require('fs');
+
+// NB: the dash must be the last member of the character class — ucode's
+// regex engine rejects the escaped form [A-Za-z0-9_\-=].
+let link_re = /^vpn:\/\/[A-Za-z0-9_=-]+$/;
+let iface_re = /^[A-Za-z0-9_]+$/;
+
+// Exit codes of /usr/bin/awgimport -> short message for LuCI (the CLI's own
+// diagnostic goes to stderr, which popen does not capture).
+function rc_message(rc) {
+	if (rc == 3)
+		return 'link is not valid base64url data';
+	if (rc == 4)
+		return 'cannot decode the vpn:// link';
+	if (rc == 5)
+		return 'no amnezia-awg container in the link (VLESS/xray links need podkop)';
+	if (rc == 6)
+		return 'awgimport is missing a required tool (base64, pigz or jq)';
+	return null;
+}
+
+return {
+	decode: {
+		args: { link: '', iface: 'awg0' },
+		call: function(req) {
+			let link = req.args.link;
+			let iface = req.args.iface;
+
+			if (type(link) != 'string' || !length(link) || !match(link, link_re))
+				return { ok: false, error: 'invalid vpn:// link' };
+
+			if (type(iface) != 'string' || !length(iface) || !match(iface, iface_re))
+				return { ok: false, error: 'invalid interface name' };
+
+			// argv array: no shell, no interpolation. Older ucode builds
+			// (< 2025.08) reject array commands, so fall back to a quoted
+			// command string; both values were restricted to
+			// [A-Za-z0-9_=-] above, so quoting is sufficient there.
+			let p = fs.popen([ '/usr/bin/awgimport', '--conf', '-i', iface, link ], 'r');
+
+			if (!p)
+				p = fs.popen("/usr/bin/awgimport --conf -i '" + iface + "' '" + link + "'", 'r');
+
+			if (!p)
+				return { ok: false, error: 'cannot run awgimport' };
+
+			let out = p.read('all');
+			let rc = p.close();
+
+			if (rc != 0)
+				return {
+					ok: false,
+					error: trim(out) || rc_message(rc) || 'decode failed',
+					code: rc
+				};
+
+			return { ok: true, config: trim(out) };
+		}
+	}
+};

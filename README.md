@@ -59,6 +59,30 @@ fw_setenv bootconf_extra mt7988a-bananapi-bpi-r4-rtc
 
 После перезагрузки должно стать доступно устройство `/dev/rtc0` и работать команда `hwclock`
 
+## Импорт AmneziaWG из ссылки `vpn://`
+
+Ссылку из приложения AmneziaVPN (`Поделиться` → `vpn://…`) можно перенести на
+роутер одной командой. Утилита распакует её, перенесёт параметры обфускации
+(`Jc/Jmin/Jmax/S1..S4/H1..H4/I1..I5/HeaderProtectionKey/...`) в секцию
+`[Interface]` и напечатает готовый конфиг и блок `uci`:
+
+```sh
+awgimport 'vpn://AAAM2Hja…'            # конфиг + uci-команды
+awgimport -i awg1 'vpn://AAAM2Hja…'    # своё имя интерфейса
+awgimport --uci 'vpn://AAAM2Hja…'      # только uci-команды
+awgimport --apply -i awg1 'vpn://…'    # применить и сразу поднять
+```
+
+Ссылку можно передать файлом (`awgimport link.txt`) или через stdin
+(`awgimport - < link.txt`).
+
+То же самое есть в LuCI: **Network → Interfaces → Add → Protocol: AmneziaWG VPN →
+Import configuration** — вставьте ссылку в поле и нажмите «Расшифровать ссылку»,
+конфигурация появится в поле ввода; дальше «Импорт настроек».
+
+Если внутри ссылки нет контейнера `amnezia-awg` (например, только `xray`/VLESS),
+утилита скажет об этом — такие ссылки настраиваются в podkop, а не здесь.
+
 ## Состав прошивки (кратко)
 
 - **FULL** (ветки master и 25.12): podkop-engine-full (sing-box с XHTTP/REALITY)

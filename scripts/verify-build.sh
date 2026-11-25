@@ -14,6 +14,17 @@ fail=0
 need()   { grep -q "^$1 - " "$MAN" || { echo "MISSING: $1"; fail=1; }; }
 absent() { if grep -q "^$1 - " "$MAN"; then echo "UNWANTED: $1"; fail=1; fi; }
 
+# Repo-side helpers shipped through files/ (no package, so never in the
+# manifest): they must exist, and the awgimport helper must be executable.
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+for f in files/usr/bin/awgimport; do
+	[ -f "$REPO_DIR/$f" ] || { echo "MISSING FILE: $f"; fail=1; }
+	[ -x "$REPO_DIR/$f" ] || { echo "NOT EXECUTABLE: $f"; fail=1; }
+done
+for f in files/usr/share/rpcd/ucode/awglink files/usr/share/rpcd/acl.d/awglink.json; do
+	[ -f "$REPO_DIR/$f" ] || { echo "MISSING FILE: $f"; fail=1; }
+done
+
 if [ "$VARIANT" = full ]; then
 	for p in podkop-engine-full xray-core luci-app-podkop luci-app-re-homeproxy luci-app-openclash \
 	         zapret2 luci-app-zapret2 naiveproxy luci-app-naiveproxy mieru luci-app-mieru \
@@ -25,7 +36,7 @@ if [ "$VARIANT" = full ]; then
 	         tcpdump iperf3 mtr-json collectd luci-app-statistics \
 	         ip6tables-nft openssh-sftp-server luci-ssl-openssl \
 	         kmod-fs-ext4 kmod-fs-ntfs3 \
-	         parted fstrim smartmontools usbutils pciutils collectd-mod-smart luci-app-diskman \
+	         parted fstrim smartmontools usbutils pciutils pigz collectd-mod-smart luci-app-diskman \
 	         luci-i18n-geodata-ru luci-i18n-mieru-ru luci-i18n-naiveproxy-ru; do
 		need "$p"
 	done
@@ -42,7 +53,7 @@ if [ "$VARIANT" = full ]; then
 elif [ "$VARIANT" = nand ]; then
 	for p in adguardhome luci-app-adguardhome zapret2 luci-app-zapret2 \
 	         kmod-amneziawg amneziawg-tools luci-proto-amneziawg \
-	         wireguard-tools luci-proto-wireguard luci-theme-argon ip6tables-nft parted; do
+	         wireguard-tools luci-proto-wireguard luci-theme-argon ip6tables-nft parted pigz; do
 		need "$p"
 	done
 	for p in sing-box sing-box-tiny podkop-engine podkop-engine-full \

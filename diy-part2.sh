@@ -8,8 +8,11 @@
 #    FULL also materializes package/podkop-engine — podkop's own sing-box build
 #    with the XHTTP transport and Xray-compatible REALITY (stock sing-box has
 #    no XHTTP, and the providers require it).
+#    Local patches (patches/awg-openwrt/*.patch) are applied to the awg-openwrt
+#    clone in name order; the directory is optional.
 # 2. Mode safety net: strip group/other write (rpcd skips world-writable
-#    ucode plugins), keep uci-defaults and libexec workers executable.
+#    ucode plugins), keep uci-defaults, libexec workers and our files/ helpers
+#    executable.
 #    Git clones normally carry proper bits — this guards against regressions
 #    (e.g. a repo committed from Windows with 644 uci-defaults).
 # 3. Enforce the include/scan.mk marker: a Makefile without the literal
@@ -21,6 +24,7 @@
 set -e
 
 VARIANT="${VARIANT:-full}"
+REPO_DIR=$(cd "$(dirname "$0")" && pwd)
 cd package
 
 clone() {
@@ -40,6 +44,24 @@ clone zapret2-openwrt  https://github.com/1andrevich/zapret2-openwrt
 clone awg-openwrt      https://github.com/slava-shchipunov/awg-openwrt
 clone luci-theme-argon https://github.com/jerrykuku/luci-theme-argon
 CLONED="zapret2-openwrt awg-openwrt luci-theme-argon"
+
+# Local patches for awg-openwrt (kept in this repo). Apply them in name order;
+# the directory may not exist yet while a patch is still being prepared.
+AWG_DIR=$PWD/awg-openwrt
+if [ -d "$REPO_DIR/patches/awg-openwrt" ]; then
+	plist="${TMPDIR:-/tmp}/awg-openwrt-patches.txt"
+	LC_ALL=C ls -1 "$REPO_DIR"/patches/awg-openwrt/*.patch 2>/dev/null |
+		LC_ALL=C sort > "$plist" || true
+	while IFS= read -r p; do
+		[ -n "$p" ] && [ -f "$p" ] || continue
+		git -C "$AWG_DIR" apply --check "$p" || {
+			echo "ERROR: patch does not apply: $p" >&2
+			exit 1
+		}
+		git -C "$AWG_DIR" apply "$p"
+	done < "$plist"
+	rm -f "$plist"
+fi
 
 if [ "$VARIANT" = full ]; then
 	clone OpenClash           https://github.com/vernesong/OpenClash
@@ -140,6 +162,9 @@ for d in $CLONED; do
 done
 find package -path '*/etc/uci-defaults/*' -type f -exec chmod 0755 {} +
 find package -path '*/usr/libexec/*' -type f -exec chmod 0755 {} +
+# files/ is copied into the tree before this script runs: our helpers must stay
+# executable even when the checkout (Windows) lost the bits.
+find files/usr/bin files/usr/share/rpcd/ucode -type f -exec chmod 0755 {} +
 
 # scan.mk marker check (luci.mk evaluates BuildPackage itself; the literal
 # marker comment is the luci-feed convention).

@@ -1,0 +1,10 @@
+{
+	"awglink": {
+		"description": "Allow LuCI to call awglink.decode, which turns an AmneziaVPN vpn:// link into an AmneziaWG config through /usr/bin/awgimport. The helper path and argv are fixed inside the rpcd plugin; the link and interface name are validated there.",
+		"read": {
+			"ubus": {
+				"awglink": [ "decode" ]
+			}
+		}
+	}
+}
