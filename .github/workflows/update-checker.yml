@@ -49,6 +49,7 @@ jobs:
           for r in \
             vernesong/OpenClash \
             itdoginfo/podkop \
+            podkop-net/podkop-engine \
             1andrevich/homeproxy-hiddify \
             yichya/luci-app-xray \
             jerrykuku/luci-theme-argon \

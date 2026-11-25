@@ -5,6 +5,9 @@
 #
 # 1. Clone the custom package repos (HEAD) needed by the variant:
 #    NAND only needs zapret2 / awg / argon; FULL clones everything.
+#    FULL also materializes package/podkop-engine — podkop's own sing-box build
+#    with the XHTTP transport and Xray-compatible REALITY (stock sing-box has
+#    no XHTTP, and the providers require it).
 # 2. Mode safety net: strip group/other write (rpcd skips world-writable
 #    ucode plugins), keep uci-defaults and libexec workers executable.
 #    Git clones normally carry proper bits — this guards against regressions
@@ -43,6 +46,7 @@ if [ "$VARIANT" = full ]; then
 	clone podkop              https://github.com/itdoginfo/podkop
 	clone homeproxy-hiddify   https://github.com/1andrevich/homeproxy-hiddify
 	clone luci-app-xray       https://github.com/yichya/luci-app-xray
+	clone podkop-engine-src   https://github.com/podkop-net/podkop-engine
 	clone_full luci-app-geodata    https://github.com/IncubusRK/luci-app-geodata
 	clone_full luci-app-naiveproxy https://github.com/IncubusRK/luci-app-naiveproxy
 	clone_full openwrt-mieru       https://github.com/IncubusRK/openwrt-mieru
@@ -68,6 +72,65 @@ for d in $CLONED; do
 	fi
 done
 
+if [ "$VARIANT" = full ]; then
+	# --- podkop-engine: skeleton + patches + version.mk -------------------
+	# The repo ships only the package skeleton plus one patch set per sing-box
+	# line; version.mk is generated here exactly like their scripts/sdk-build.sh
+	# does it for the SDK. NaiveProxy inside sing-box stays OFF (no lld/cronet):
+	# the standalone naiveproxy package already covers that protocol.
+	PODKOP_ENGINE_LINE="${PODKOP_ENGINE_LINE:-1.14}"
+
+	. podkop-engine-src/versions.env
+
+	key=$(printf '%s' "$PODKOP_ENGINE_LINE" | tr . _)
+	eval "SB_VERSION=\${SB_${key}_VERSION:-}"
+	eval "SB_HASH=\${SB_${key}_HASH:-}"
+	eval "SB_RELEASE=\${SB_${key}_RELEASE:-}"
+
+	[ -n "$SB_VERSION" ] && [ -n "$SB_HASH" ] && [ -n "$SB_RELEASE" ] || {
+		echo "ERROR: podkop-engine line $PODKOP_ENGINE_LINE is not defined in versions.env" >&2
+		exit 1
+	}
+	[ -d "podkop-engine-src/patches/v$PODKOP_ENGINE_LINE" ] || {
+		echo "ERROR: podkop-engine has no patches/v$PODKOP_ENGINE_LINE (bump PODKOP_ENGINE_LINE)" >&2
+		exit 1
+	}
+
+	rm -rf podkop-engine
+	cp -a podkop-engine-src/openwrt/podkop-engine podkop-engine
+	mkdir -p podkop-engine/patches
+	cp "podkop-engine-src/patches/v$PODKOP_ENGINE_LINE"/*.patch podkop-engine/patches/
+	cat > podkop-engine/version.mk <<EOF
+SB_VERSION:=$SB_VERSION
+SB_HASH:=$SB_HASH
+SB_RELEASE:=$SB_RELEASE
+# NaiveProxy inside sing-box stays off: no lld/cronet in CI, the standalone
+# naiveproxy package covers the protocol.
+PODKOP_ENGINE_LLD:=
+EOF
+	printf 'podkop-engine %s-r%s (patches v%s, fork %s)\n' \
+		"$SB_VERSION" "$SB_RELEASE" "$PODKOP_ENGINE_LINE" \
+		"$(git -C podkop-engine-src rev-parse HEAD)" >> ../repo-heads.txt
+
+	# Break the Kconfig cycle: podkop selects +sing-box, while podkop-engine
+	# PROVIDES and CONFLICTS it. An image build cannot express "provides"
+	# (unlike apk at install time), so defconfig silently drops the engine.
+	# The engine installs /usr/bin/sing-box anyway.
+	sed -i -E 's/(DEPENDS:=)\+sing-box[[:space:]]*/\1/' podkop/podkop/Makefile
+	grep -q -- '+sing-box' podkop/podkop/Makefile && {
+		echo "ERROR: podkop still selects sing-box (upstream DEPENDS changed?)" >&2
+		exit 1
+	}
+	sed -i -E '/^[[:space:]]*CONFLICTS:=sing-box sing-box-tiny[[:space:]]*$/d' podkop-engine/Makefile
+	grep -qE '^[[:space:]]*CONFLICTS:=sing-box sing-box-tiny[[:space:]]*$' podkop-engine/Makefile && {
+		echo "ERROR: podkop-engine still conflicts with sing-box (upstream changed?)" >&2
+		exit 1
+	}
+
+	rm -rf podkop-engine-src
+	CLONED="$CLONED podkop-engine"
+fi
+
 cd ..
 
 # Mode safety net (see header). One uci-defaults pattern covers both
@@ -85,6 +148,7 @@ if [ "$VARIANT" = full ]; then
 	         package/luci-app-naiveproxy/Makefile \
 	         package/openwrt-mieru/mieru/Makefile \
 	         package/openwrt-mieru/luci-app-mieru/Makefile \
+	         package/podkop-engine/Makefile \
 	         package/luci-app-diskman/Makefile; do
 		grep -q 'call BuildPackage' "$m" || { echo "ERROR: scan.mk marker missing in $m" >&2; exit 1; }
 	done

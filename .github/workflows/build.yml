@@ -196,6 +196,20 @@ jobs:
           test -f files/usr/share/rpcd/acl.d/luci-file-rpc.json
           if [ "${{ matrix.variant }}" = full ]; then
             sha256sum files/usr/share/v2ray/geoip.dat files/usr/share/v2ray/geosite.dat
+            # podkop-engine-full must be built WITHOUT NaiveProxy: that needs
+            # lld + the cronet static lib, and the standalone naiveproxy
+            # package already covers the protocol. Catch a silent lld pickup
+            # (the runner may ship /usr/lib/llvm-*/bin/ld.lld).
+            BIN=$(find build_dir -path '*podkop-engine-full/sing-box-*/*/usr/bin/sing-box' -type f 2>/dev/null | head -n 1)
+            if [ -n "$BIN" ]; then
+              if grep -ao -- '-tags=[a-z0-9_,]*' "$BIN" | grep -q with_naive_outbound; then
+                echo "ERROR: sing-box was built with NaiveProxy (lld/cronet leaked in)" >&2
+                exit 1
+              fi
+              echo "podkop-engine-full: NaiveProxy not linked (as intended)"
+            else
+              echo "::warning::cannot locate the podkop-engine-full binary to check build tags"
+            fi
           else
             test ! -d files/usr/share/v2ray
           fi

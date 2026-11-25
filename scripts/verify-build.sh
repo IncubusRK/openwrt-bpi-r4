@@ -15,7 +15,7 @@ need()   { grep -q "^$1 - " "$MAN" || { echo "MISSING: $1"; fail=1; }; }
 absent() { if grep -q "^$1 - " "$MAN"; then echo "UNWANTED: $1"; fail=1; fi; }
 
 if [ "$VARIANT" = full ]; then
-	for p in sing-box xray-core luci-app-podkop luci-app-re-homeproxy luci-app-openclash \
+	for p in podkop-engine-full xray-core luci-app-podkop luci-app-re-homeproxy luci-app-openclash \
 	         zapret2 luci-app-zapret2 naiveproxy luci-app-naiveproxy mieru luci-app-mieru \
 	         luci-app-geodata adguardhome luci-app-adguardhome \
 	         kmod-amneziawg amneziawg-tools luci-proto-amneziawg \
@@ -30,8 +30,11 @@ if [ "$VARIANT" = full ]; then
 		need "$p"
 	done
 	# removed from the composition / must stay out of the image (=m or dropped)
+	# sing-box/sing-box-tiny/podkop-engine are replaced by podkop-engine-full
+	# (PROVIDES sing-box, adds XHTTP).
 	for p in python3 ruantiblock smartdns microsocks https-dns-proxy \
 	         luci-app-passwall luci-app-passwall2 \
+	         sing-box sing-box-tiny podkop-engine \
 	         docker dockerd docker-compose samba4-server samba4-libs luci-app-samba4 \
 	         ntfs-3g ntfs-3g-utils btrfs-progs; do
 		absent "$p"
@@ -42,7 +45,8 @@ elif [ "$VARIANT" = nand ]; then
 	         wireguard-tools luci-proto-wireguard luci-theme-argon ip6tables-nft parted; do
 		need "$p"
 	done
-	for p in sing-box xray-core luci-app-podkop luci-app-re-homeproxy luci-app-openclash \
+	for p in sing-box sing-box-tiny podkop-engine podkop-engine-full \
+	         xray-core luci-app-podkop luci-app-re-homeproxy luci-app-openclash \
 	         naiveproxy mieru luci-app-mieru luci-app-geodata luci-app-naiveproxy \
 	         docker dockerd docker-compose mwan3 v2ray-geoip v2ray-geosite \
 	         luci-app-diskman samba4-server; do

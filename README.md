@@ -61,7 +61,8 @@ fw_setenv bootconf_extra mt7988a-bananapi-bpi-r4-rtc
 
 ## Состав прошивки (кратко)
 
-- **FULL** (ветки master и 25.12): sing-box + xray-core, Podkop / Re:HomeProxy /
+- **FULL** (ветки master и 25.12): podkop-engine-full (sing-box с XHTTP/REALITY)
+  + xray-core, Podkop / Re:HomeProxy /
   OpenClash, zapret2, NaiveProxy, mieru, WireGuard + AmneziaWG, AdGuard Home
   (включён по умолчанию, фильтрация рекламы), полный LuCI + argon + русский язык,
   SQM/CAKE, watchcat, nlbwmon, tcpdump/iperf3/mtr, collectd-графики, дисковые
