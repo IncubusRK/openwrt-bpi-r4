@@ -25,6 +25,7 @@ on:
       - 'seeds/**'
       - 'files/**'
       - 'scripts/**'
+      - 'patches/**'
       - 'diy-part*.sh'
       - '.github/workflows/build.yml'
   repository_dispatch:
